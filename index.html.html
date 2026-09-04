@@ -1,0 +1,536 @@
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #0d1117; color: #c9d4e0;
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    overflow: hidden;
+  }
+  #stage { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0;
+    padding: 14px 18px 10px;
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    background: linear-gradient(#0d1117ee, #0d111700);
+    pointer-events: none;
+  }
+  #hud h1 { font-size: 17px; font-weight: 700; margin: 0; letter-spacing: -0.02em; color: #eaf0f6; }
+  #hud p { margin: 0; font-size: 12.5px; color: #7d8b9c; }
+
+  #panel {
+    position: fixed; left: 14px; bottom: 14px;
+    background: #161c25f2; border: 1px solid #263041;
+    border-radius: 10px; padding: 12px; width: 224px;
+    max-height: calc(100vh - 110px); overflow-y: auto;
+  }
+  .grp { margin-bottom: 13px; }
+  .grp:last-child { margin-bottom: 0; }
+  .grp > span {
+    display: block; font-size: 11px; color: #6e7d90;
+    margin-bottom: 6px; font-weight: 500;
+  }
+  button {
+    font-family: inherit; font-size: 12px; color: #b6c3d2;
+    background: #1e2733; border: 1px solid #2c3849;
+    border-radius: 6px; padding: 6px 9px; cursor: pointer;
+    width: 100%; text-align: left; margin-bottom: 4px;
+    transition: background .15s, border-color .15s;
+  }
+  button:hover { background: #26313f; }
+  button:focus-visible { outline: 2px solid #58a6ff; outline-offset: 1px; }
+  button.on { background: #223449; border-color: #3d6488; color: #e6eef7; }
+  .row { display: flex; gap: 4px; }
+  .row button { margin-bottom: 0; }
+
+  .lbl {
+    position: fixed; transform: translate(-50%, -50%);
+    font-size: 11.5px; font-weight: 500; letter-spacing: .01em;
+    padding: 3px 8px; border-radius: 5px;
+    background: #0d1117d9; border: 1px solid #2c3849;
+    white-space: nowrap; pointer-events: none;
+  }
+  .lbl.diy { color: #a5e04a; border-color: #3f5c1c; }
+  .lbl.hp  { color: #57c4f0; border-color: #1c4a63; }
+  .lbl.key { color: #f0b95c; border-color: #63481c; }
+
+  #legend {
+    position: fixed; right: 14px; bottom: 14px;
+    background: #161c25f2; border: 1px solid #263041;
+    border-radius: 10px; padding: 11px 13px; font-size: 11.5px;
+  }
+  #legend div { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; color: #93a2b4; }
+  #legend div:last-child { margin-bottom: 0; }
+  .sw { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+
+  #hint {
+    position: fixed; top: 62px; left: 50%; transform: translateX(-50%);
+    font-size: 11.5px; color: #64738a; pointer-events: none;
+  }
+  @media (max-width: 640px) {
+    #panel { width: 170px; padding: 10px; }
+    #legend { display: none; }
+    #hud h1 { font-size: 15px; }
+  }
+</style>
+
+<div id="stage"></div>
+
+<div id="hud">
+  <h1>AI Day — floor plan</h1>
+  <p>3 hours · 2 zones · 6 demo stations</p>
+</div>
+<div id="hint">Drag to orbit · scroll to zoom</div>
+
+<div id="panel">
+  <div class="grp">
+    <span>Layout</span>
+    <button data-layout="0" class="on">Split zones (planned)</button>
+    <button data-layout="1">Central stage island</button>
+    <button data-layout="2">Runway walkthrough</button>
+  </div>
+  <div class="grp">
+    <span>View</span>
+    <button data-view="0" class="on">Overview</button>
+    <button data-view="1">Top-down plan</button>
+    <button data-view="2">DIY zone</button>
+    <button data-view="3">HP zone</button>
+    <button data-view="4">Eye level</button>
+  </div>
+  <div class="grp">
+    <span>Show</span>
+    <div class="row">
+      <button id="tCrowd" class="on">Crowd</button>
+      <button id="tLabels" class="on">Labels</button>
+    </div>
+  </div>
+</div>
+
+<div id="legend">
+  <div><span class="sw" style="background:#76b900"></span>DIY RTX builds</div>
+  <div><span class="sw" style="background:#0096d6"></span>HP workstations</div>
+  <div><span class="sw" style="background:#e8a33d"></span>Stage &amp; registration</div>
+  <div><span class="sw" style="background:#5d6b7d"></span>Attendees (~45)</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const DIY = 0x76b900, HP = 0x0096d6, WARM = 0xe8a33d;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1117);
+scene.fog = new THREE.Fog(0x0d1117, 45, 105);
+
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 400);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.getElementById('stage').appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0x9fb6d0, 0x1a2029, 0.85));
+const key = new THREE.DirectionalLight(0xffffff, 0.75);
+key.position.set(16, 26, 14);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.left = -30; key.shadow.camera.right = 30;
+key.shadow.camera.top = 30; key.shadow.camera.bottom = -30;
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xaecbe8, 0.25);
+fill.position.set(-14, 12, -12);
+scene.add(fill);
+
+const W = 42, D = 30;
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(W, D),
+  new THREE.MeshStandardMaterial({ color: 0x1a212c, roughness: 0.95 })
+);
+floor.rotation.x = -Math.PI/2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+const grid = new THREE.GridHelper(W, W/2, 0x2b3646, 0x212a36);
+grid.position.y = 0.01;
+scene.add(grid);
+
+function wall(w, h, d, x, y, z) {
+  const m = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h, d),
+    new THREE.MeshStandardMaterial({ color: 0x141a23, roughness: 1 })
+  );
+  m.position.set(x, y, z);
+  m.receiveShadow = true;
+  scene.add(m);
+}
+wall(W, 3.4, 0.3, 0, 1.7, -D/2);
+wall(0.3, 3.4, D, -W/2, 1.7, 0);
+wall(0.3, 3.4, D,  W/2, 1.7, 0);
+
+function signTexture(text, sub, hex) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 160;
+  const g = c.getContext('2d');
+  g.fillStyle = '#141a23'; g.fillRect(0,0,512,160);
+  g.fillStyle = hex; g.fillRect(0, 0, 512, 7);
+  g.fillStyle = '#e8eff7';
+  g.font = '600 42px "Space Grotesk", sans-serif';
+  g.textAlign = 'center';
+  g.fillText(text, 256, 78);
+  if (sub) {
+    g.fillStyle = '#8d9db0';
+    g.font = '400 26px "Space Grotesk", sans-serif';
+    g.fillText(sub, 256, 118);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.anisotropy = 4;
+  return t;
+}
+
+const boxMat = (c, r=0.7, m=0.1) =>
+  new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m });
+
+function box(w,h,d,mat,x,y,z,parent) {
+  const b = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
+  b.position.set(x,y,z);
+  b.castShadow = true; b.receiveShadow = true;
+  parent.add(b);
+  return b;
+}
+
+function monitor(g, x, y, z, w=1.0, h=0.6, rotY=0) {
+  const m = new THREE.Group();
+  box(0.1, 0.35, 0.1, boxMat(0x2b3340), 0, y-h/2-0.17, 0, m);
+  box(0.34, 0.03, 0.24, boxMat(0x2b3340), 0, y-h/2-0.34, 0, m);
+  box(w, h, 0.05, boxMat(0x1c222c), 0, y, 0, m);
+  const scr = box(w-0.07, h-0.07, 0.01, new THREE.MeshStandardMaterial({
+    color: 0x2f6fa8, emissive: 0x2a5c8a, emissiveIntensity: 0.9, roughness: 0.4
+  }), 0, y, 0.033, m);
+  m.position.set(x, 0, z);
+  m.rotation.y = rotY;
+  g.add(m);
+  return m;
+}
+
+function booth(cfg) {
+  const g = new THREE.Group();
+  const accent = cfg.zone === 'diy' ? DIY : HP;
+
+  // carpet tile
+  const car = new THREE.Mesh(
+    new THREE.PlaneGeometry(5.4, 4.6),
+    new THREE.MeshStandardMaterial({
+      color: cfg.zone === 'diy' ? 0x233019 : 0x14293a, roughness: 1
+    })
+  );
+  car.rotation.x = -Math.PI/2; car.position.y = 0.02;
+  car.receiveShadow = true;
+  g.add(car);
+
+  // backdrop banner
+  const bg = box(4.6, 2.5, 0.12, boxMat(0x161d26), 0, 1.55, -2.0, g);
+  const sign = new THREE.Mesh(
+    new THREE.PlaneGeometry(4.3, 1.35),
+    new THREE.MeshBasicMaterial({ map: signTexture(cfg.name, cfg.sub, cfg.zone==='diy' ? '#76b900' : '#0096d6') })
+  );
+  sign.position.set(0, 1.95, -1.93);
+  g.add(sign);
+  // accent stripe on floor edge
+  box(4.6, 0.06, 0.14, boxMat(accent, 0.5, 0.2), 0, 0.03, 2.1, g);
+
+  // demo table
+  box(3.2, 0.08, 1.3, boxMat(0x39434f), 0, 0.78, 0, g);
+  box(0.12, 0.78, 0.12, boxMat(0x2a323c), -1.45, 0.39, -0.5, g);
+  box(0.12, 0.78, 0.12, boxMat(0x2a323c),  1.45, 0.39, -0.5, g);
+  box(0.12, 0.78, 0.12, boxMat(0x2a323c), -1.45, 0.39,  0.5, g);
+  box(0.12, 0.78, 0.12, boxMat(0x2a323c),  1.45, 0.39,  0.5, g);
+
+  if (cfg.zone === 'diy') {
+    // tower with a glowing side panel
+    const tw = box(0.6, 1.1, 1.0, boxMat(0x171d26, 0.5, 0.4), -1.05, 1.37, 0, g);
+    box(0.02, 0.85, 0.75, new THREE.MeshStandardMaterial({
+      color: accent, emissive: accent, emissiveIntensity: 0.65, roughness: 0.3
+    }), -0.74, 1.37, 0, g);
+    monitor(g, 0.55, 1.32, 0, 1.5, 0.9);
+    box(0.55, 0.03, 0.2, boxMat(0x222932), 0.55, 0.83, 0.5, g); // keyboard
+  } else {
+    // laptop workstation
+    box(1.05, 0.05, 0.72, boxMat(0x30363f, 0.5, 0.5), -0.9, 0.85, 0.1, g);
+    const lid = box(1.05, 0.68, 0.04, new THREE.MeshStandardMaterial({
+      color: 0x2b323c, roughness: 0.5, metalness: 0.4
+    }), -0.9, 1.18, -0.24, g);
+    lid.rotation.x = -0.18;
+    if (cfg.dual) {
+      monitor(g, 0.55, 1.35, -0.15, 1.35, 0.85, 0.16);
+      monitor(g, 1.95, 1.35, 0.25, 1.35, 0.85, -0.30);
+    } else {
+      monitor(g, 0.9, 1.35, 0, 1.6, 0.95);
+    }
+  }
+
+  // stool
+  const st = new THREE.Mesh(new THREE.CylinderGeometry(0.24,0.24,0.62,12), boxMat(0x2e3742));
+  st.position.set(1.9, 0.31, 1.1); st.castShadow = true;
+  g.add(st);
+
+  g.userData.label = cfg.name;
+  g.userData.zone = cfg.zone;
+  return g;
+}
+
+// ---- stage & registration ----
+const stage = new THREE.Group();
+(function(){
+  const deck = box(11, 0.55, 5, boxMat(0x232b36), 0, 0.27, 0, stage);
+  box(11, 0.07, 0.12, boxMat(WARM, 0.5, 0.2), 0, 0.58, 2.5, stage);
+  const scr = box(8.2, 4.0, 0.2, boxMat(0x11161e), 0, 3.1, -2.3, stage);
+  const face = new THREE.Mesh(
+    new THREE.PlaneGeometry(7.7, 3.5),
+    new THREE.MeshBasicMaterial({ map: signTexture('AI Day', 'Local AI, powered by RTX', '#e8a33d') })
+  );
+  face.position.set(0, 3.1, -2.18);
+  stage.add(face);
+  // lectern
+  box(0.8, 1.05, 0.5, boxMat(0x39434f), -3.4, 1.07, 0.9, stage);
+  // truss
+  const trussMat = boxMat(0x3a4450, 0.6, 0.5);
+  box(12, 0.16, 0.16, trussMat, 0, 5.6, -1.2, stage);
+  for (const x of [-5, 0, 5]) {
+    const lamp = box(0.3, 0.3, 0.3, new THREE.MeshStandardMaterial({
+      color: WARM, emissive: WARM, emissiveIntensity: 0.8
+    }), x, 5.35, -1.2, stage);
+  }
+  stage.userData.label = 'Stage';
+})();
+scene.add(stage);
+
+const reg = new THREE.Group();
+(function(){
+  const car = new THREE.Mesh(new THREE.PlaneGeometry(6.5, 3.2),
+    new THREE.MeshStandardMaterial({ color: 0x2c2418, roughness: 1 }));
+  car.rotation.x = -Math.PI/2; car.position.y = 0.02;
+  reg.add(car);
+  box(4.6, 1.05, 0.8, boxMat(0x39434f), 0, 0.52, 0, reg);
+  box(4.6, 0.08, 0.9, boxMat(WARM, 0.6, 0.2), 0, 1.08, 0, reg);
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 1.05),
+    new THREE.MeshBasicMaterial({ map: signTexture('Check-in', 'Badges + passport cards', '#e8a33d'), transparent: true }));
+  sign.position.set(0, 2.3, -0.42);
+  reg.add(sign);
+  box(0.1, 2.4, 0.1, boxMat(0x2e3742), -1.7, 1.2, -0.42, reg);
+  box(0.1, 2.4, 0.1, boxMat(0x2e3742),  1.7, 1.2, -0.42, reg);
+  reg.userData.label = 'Registration';
+})();
+scene.add(reg);
+
+// ---- booths ----
+const booths = [
+  booth({ name:'Entry RTX build',  sub:'Image generator', zone:'diy' }),
+  booth({ name:'Mid RTX build',    sub:'Private chatbot', zone:'diy' }),
+  booth({ name:'High-end build',   sub:'Live style transfer', zone:'diy' }),
+  booth({ name:'HP · LLM',   sub:'Fine-tune + query', zone:'hp', dual:true }),
+  booth({ name:'HP · ML',    sub:'CPU vs GPU race',   zone:'hp' }),
+  booth({ name:'HP · AEC',   sub:'Real-time walkthrough', zone:'hp' })
+];
+booths.forEach(b => scene.add(b));
+
+// ---- crowd ----
+const crowdColors = [0x5d6b7d, 0x6b7a8c, 0x4e5b6b, 0x77869a, 0x566374, 0x8391a4];
+const crowd = new THREE.Group();
+const people = [];
+for (let i = 0; i < 45; i++) {
+  const p = new THREE.Group();
+  const c = crowdColors[i % crowdColors.length];
+  const h = 1.55 + Math.random()*0.28;
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.2, 0.26, h*0.62, 10),
+    boxMat(c, 0.9, 0)
+  );
+  body.position.y = h*0.31 + 0.32;
+  body.castShadow = true;
+  p.add(body);
+  const legs = new THREE.Mesh(new THREE.CylinderGeometry(0.16,0.13,0.62,8), boxMat(0x2f3742,0.9,0));
+  legs.position.y = 0.31; legs.castShadow = true;
+  p.add(legs);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 10), boxMat(0x8a7160, 0.9, 0));
+  head.position.y = h*0.62 + 0.48;
+  head.castShadow = true;
+  p.add(head);
+  p.rotation.y = Math.random()*Math.PI*2;
+  crowd.add(p);
+  people.push(p);
+}
+scene.add(crowd);
+
+// ---- layouts ----
+function place(o, x, z, ry=0) { o.position.set(x, 0, z); o.rotation.y = ry; }
+
+const layouts = [
+  // 0 — split zones (the planned layout)
+  () => {
+    place(stage, 0, -11);
+    place(reg, 0, 12.4, Math.PI);
+    place(booths[0], -13, -3.5, Math.PI/2);
+    place(booths[1], -13,  2.0, Math.PI/2);
+    place(booths[2], -13,  7.5, Math.PI/2);
+    place(booths[3],  13, -3.5, -Math.PI/2);
+    place(booths[4],  13,  2.0, -Math.PI/2);
+    place(booths[5],  13,  7.5, -Math.PI/2);
+    seatCrowd([[-10,0,7],[10,0,7],[0,-5,9],[-11,6,5],[11,6,5],[0,10,6]]);
+  },
+  // 1 — central stage island
+  () => {
+    place(stage, 0, 0);
+    place(reg, 0, 13, Math.PI);
+    place(booths[0], -14, -7.5, Math.PI/2);
+    place(booths[1], -14, -1.5, Math.PI/2);
+    place(booths[2], -14,  4.5, Math.PI/2);
+    place(booths[3],  14, -7.5, -Math.PI/2);
+    place(booths[4],  14, -1.5, -Math.PI/2);
+    place(booths[5],  14,  4.5, -Math.PI/2);
+    seatCrowd([[0,7,12],[-11,-4,8],[11,-4,8],[-11,4,6],[11,4,6],[0,11,5]]);
+  },
+  // 2 — runway walkthrough
+  () => {
+    place(stage, 0, -11.5);
+    place(reg, 0, 13, Math.PI);
+    place(booths[0], -7.5,  8.0, Math.PI/2);
+    place(booths[1], -7.5,  2.5, Math.PI/2);
+    place(booths[2], -7.5, -3.0, Math.PI/2);
+    place(booths[3],  7.5,  8.0, -Math.PI/2);
+    place(booths[4],  7.5,  2.5, -Math.PI/2);
+    place(booths[5],  7.5, -3.0, -Math.PI/2);
+    seatCrowd([[0,4,14],[0,-6,9],[-5,8,7],[5,8,7],[0,11,6],[-5,0,5]]);
+  }
+];
+
+function seatCrowd(clusters) {
+  let i = 0;
+  for (const [cx, cz, n] of clusters) {
+    for (let k = 0; k < n && i < people.length; k++, i++) {
+      const a = Math.random()*Math.PI*2, r = Math.random()*2.6;
+      people[i].position.set(
+        Math.max(-19, Math.min(19, cx + Math.cos(a)*r)),
+        0,
+        Math.max(-13.5, Math.min(13.5, cz + Math.sin(a)*r))
+      );
+      people[i].rotation.y = Math.random()*Math.PI*2;
+    }
+  }
+  for (; i < people.length; i++) {
+    people[i].position.set((Math.random()-0.5)*30, 0, (Math.random()-0.5)*20);
+  }
+}
+
+// ---- camera orbit ----
+let az = 0.62, pol = 0.92, dist = 42;
+const target = new THREE.Vector3(0, 1.5, 0);
+let tAz = az, tPol = pol, tDist = dist;
+const tTarget = target.clone();
+
+function views(i) {
+  const v = [
+    [0.62, 0.92, 42, 0, 1.5, 0],
+    [0.0,  0.045, 44, 0, 0, 0],
+    [1.35, 0.95, 20, -12, 1.2, 2],
+    [-1.35, 0.95, 20, 12, 1.2, 2],
+    [0.5,  1.44, 15, 0, 1.6, 6]
+  ][i];
+  tAz = v[0]; tPol = v[1]; tDist = v[2];
+  tTarget.set(v[3], v[4], v[5]);
+}
+
+let drag = false, px = 0, py = 0;
+const el = renderer.domElement;
+el.addEventListener('pointerdown', e => { drag = true; px = e.clientX; py = e.clientY; el.setPointerCapture(e.pointerId); });
+el.addEventListener('pointerup', e => { drag = false; });
+el.addEventListener('pointermove', e => {
+  if (!drag) return;
+  tAz -= (e.clientX - px) * 0.006;
+  tPol = Math.max(0.04, Math.min(1.52, tPol - (e.clientY - py) * 0.005));
+  px = e.clientX; py = e.clientY;
+});
+el.addEventListener('wheel', e => {
+  e.preventDefault();
+  tDist = Math.max(8, Math.min(70, tDist + e.deltaY * 0.035));
+}, { passive: false });
+
+// ---- labels ----
+const labelDefs = [];
+function buildLabels() {
+  labelDefs.length = 0;
+  document.querySelectorAll('.lbl').forEach(n => n.remove());
+  const add = (obj, text, cls, yOff) => {
+    const d = document.createElement('div');
+    d.className = 'lbl ' + cls;
+    d.textContent = text;
+    document.body.appendChild(d);
+    labelDefs.push({ obj, el: d, yOff });
+  };
+  booths.forEach(b => add(b, b.userData.label, b.userData.zone === 'diy' ? 'diy' : 'hp', 3.4));
+  add(stage, 'Stage', 'key', 6.4);
+  add(reg, 'Registration', 'key', 3.0);
+}
+buildLabels();
+let labelsOn = true, crowdOn = true;
+
+const proj = new THREE.Vector3();
+function updateLabels() {
+  for (const L of labelDefs) {
+    if (!labelsOn) { L.el.style.display = 'none'; continue; }
+    proj.set(L.obj.position.x, L.yOff, L.obj.position.z).project(camera);
+    if (proj.z > 1) { L.el.style.display = 'none'; continue; }
+    L.el.style.display = 'block';
+    L.el.style.left = ((proj.x*0.5+0.5) * innerWidth) + 'px';
+    L.el.style.top  = ((-proj.y*0.5+0.5) * innerHeight) + 'px';
+  }
+}
+
+// ---- UI ----
+function group(sel, fn) {
+  document.querySelectorAll(sel).forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll(sel).forEach(o => o.classList.remove('on'));
+    b.classList.add('on');
+    fn(b);
+  }));
+}
+group('[data-layout]', b => layouts[+b.dataset.layout]());
+group('[data-view]', b => views(+b.dataset.view));
+
+document.getElementById('tCrowd').addEventListener('click', e => {
+  crowdOn = !crowdOn;
+  crowd.visible = crowdOn;
+  e.target.classList.toggle('on', crowdOn);
+});
+document.getElementById('tLabels').addEventListener('click', e => {
+  labelsOn = !labelsOn;
+  e.target.classList.toggle('on', labelsOn);
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+layouts[0]();
+views(0);
+
+function tick() {
+  requestAnimationFrame(tick);
+  az += (tAz - az) * 0.1;
+  pol += (tPol - pol) * 0.1;
+  dist += (tDist - dist) * 0.1;
+  target.lerp(tTarget, 0.1);
+  camera.position.set(
+    target.x + dist * Math.sin(pol) * Math.sin(az),
+    target.y + dist * Math.cos(pol),
+    target.z + dist * Math.sin(pol) * Math.cos(az)
+  );
+  camera.lookAt(target);
+  updateLabels();
+  renderer.render(scene, camera);
+}
+tick();
+</script>
